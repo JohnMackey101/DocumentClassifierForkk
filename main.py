@@ -121,14 +121,24 @@ def export_results(documents, processed_texts, cluster_labels, vectors, clusteri
         if same_cluster_docs:
             # Get the document's vector
             doc_vector = vectors[doc_idx]
-            
+
             for other_idx in same_cluster_docs:
                 other_name = doc_names[other_idx]
                 other_vector = vectors[other_idx]
-                
+
+                # Ensure vectors are 2D for sklearn pairwise functions.
+                # Dense numpy 1D rows (from sentence_embeddings[i]) must be reshaped.
+                def to_2d(v):
+                    if hasattr(v, 'getnnz'):
+                        return v  # sparse matrix row is already 2D
+                    return v.reshape(1, -1) if v.ndim == 1 else v
+
+                dv = to_2d(doc_vector)
+                ov = to_2d(other_vector)
+
                 # Calculate various similarity metrics
-                cosine_sim = float(cosine_similarity(doc_vector, other_vector)[0][0])
-                eucl_dist = float(euclidean_distances(doc_vector, other_vector)[0][0])
+                cosine_sim = float(cosine_similarity(dv, ov)[0][0])
+                eucl_dist = float(euclidean_distances(dv, ov)[0][0])
                 eucl_sim = 1 / (1 + eucl_dist) if eucl_dist != 0 else 1.0
                 
                 # Calculate Jaccard similarity
@@ -136,10 +146,17 @@ def export_results(documents, processed_texts, cluster_labels, vectors, clusteri
                 other_tokens = set(processed_texts[other_idx].split())
                 jaccard_sim = len(doc_tokens.intersection(other_tokens)) / len(doc_tokens.union(other_tokens)) if doc_tokens or other_tokens else 0.0
                 
-                # Calculate centroid similarity
-                centroid = clustering_instance.kmeans.cluster_centers_[cluster_labels[doc_idx]]
-                centroid_sim = float(cosine_similarity(other_vector, centroid.reshape(1, -1))[0][0])
-                
+                # Calculate centroid similarity using KMeans centers.
+                # HDBSCAN labels may be -1 (noise); skip centroid for those.
+                centroid_sim = 0.0
+                try:
+                    lbl = cluster_labels[doc_idx]
+                    if lbl >= 0 and hasattr(clustering_instance.kmeans, 'cluster_centers_'):
+                        centroid = clustering_instance.kmeans.cluster_centers_[lbl]
+                        centroid_sim = float(cosine_similarity(to_2d(other_vector), centroid.reshape(1, -1))[0][0])
+                except Exception:
+                    pass
+
                 similarity_metrics.append({
                     "document": other_name,
                     "cosine_similarity": round(cosine_sim, 4),
@@ -257,14 +274,23 @@ def main():
         doc_names = [doc["name"] for doc in documents]
 
         # Perform clustering
-        vectors, cluster_labels, cluster_centers = clustering.cluster_documents(processed_texts)
+        vectors, sentence_embeddings, cluster_labels, cluster_centers, hdbscan_labels = clustering.cluster_documents(processed_texts)
+        
+        # Lowkey just gonna replace vectors with sentence_embeddings and cluster_labels with hdbscan_labels for visualization since HDBScan is more robust for small datasets and can handle noise better. KMeans can be sensitive to outliers and may not perform well with small datasets, while HDBScan can identify clusters of varying densities and is less affected by noise. 
+    
+        vectors = sentence_embeddings
+        cluster_labels = hdbscan_labels
         
         # Display results
         col1, col2 = st.columns(2)
         
         with col1:
             st.header("Cluster Visualization")
-            fig = visualizer.plot_clusters(vectors, cluster_labels, doc_names)
+            # this is for kmeans
+            #fig = visualizer.plot_clusters(vectors, cluster_labels, doc_names)
+
+            # hdbscan visualization
+            fig = visualizer.plot_clusters(sentence_embeddings, hdbscan_labels, doc_names)
             st.plotly_chart(fig)
 
         with col2:

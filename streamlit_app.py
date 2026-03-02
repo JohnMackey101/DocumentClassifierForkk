@@ -71,18 +71,29 @@ class DocumentClustering:
     def calculate_centroid_similarity(self, vector, cluster_label):
         # Calculate similarity between a document and its cluster centroid with error handling
         try:
-            # Check if vector or centroid is zero
-            if vector.getnnz() == 0 or not hasattr(self.kmeans, 'cluster_centers_'):
+            if not hasattr(self.kmeans, 'cluster_centers_'):
                 return 0.0
-                
+
+            # HDBSCAN labels -1 = noise; no valid centroid to compare against
+            if cluster_label < 0:
+                return 0.0
+
             centroid = self.kmeans.cluster_centers_[cluster_label]
-            
+
             # Check if centroid is zero vector
             if np.all(np.abs(centroid) < 1e-10):
                 return 0.0
-                
-            similarity = cosine_similarity(vector, centroid.reshape(1, -1))[0][0]
-            
+
+            # Ensure vector is 2D for cosine_similarity (works for both sparse and dense)
+            if hasattr(vector, 'getnnz'):
+                if vector.getnnz() == 0:
+                    return 0.0
+                vec_2d = vector
+            else:
+                vec_2d = vector.reshape(1, -1) if vector.ndim == 1 else vector
+
+            similarity = cosine_similarity(vec_2d, centroid.reshape(1, -1))[0][0]
+
             # Handle NaN values
             return float(similarity) if not np.isnan(similarity) else 0.0
         except Exception:
@@ -129,17 +140,28 @@ class DocumentClustering:
                     'Average Similarity': 0.0
                 }
                 
+                # Helper: ensure a vector is 2D for sklearn pairwise functions.
+                def to_2d(v):
+                    if hasattr(v, 'getnnz'):
+                        return v  # sparse matrix row is already 2D
+                    return v.reshape(1, -1) if v.ndim == 1 else v
+
+                tv = to_2d(target_vector)
+                ov = to_2d(vectors[idx])
+
                 # Cosine similarity with error handling
                 try:
-                    if target_vector.getnnz() > 0 and vectors[idx].getnnz() > 0:
-                        cosine_sim = cosine_similarity(target_vector, vectors[idx])[0][0]
+                    tv_nonzero = tv.getnnz() > 0 if hasattr(tv, 'getnnz') else np.any(tv != 0)
+                    ov_nonzero = ov.getnnz() > 0 if hasattr(ov, 'getnnz') else np.any(ov != 0)
+                    if tv_nonzero and ov_nonzero:
+                        cosine_sim = cosine_similarity(tv, ov)[0][0]
                         metrics_dict['Cosine Similarity'] = round(float(cosine_sim), 4)
                 except Exception:
                     pass
                 
                 # Euclidean similarity with error handling
                 try:
-                    eucl_dist = euclidean_distances(target_vector, vectors[idx])[0][0]
+                    eucl_dist = euclidean_distances(tv, ov)[0][0]
                     if eucl_dist != 0:
                         eucl_sim = 1 / (1 + eucl_dist)
                         metrics_dict['Euclidean Similarity'] = round(float(eucl_sim), 4)
@@ -531,9 +553,18 @@ def export_results(documents, processed_texts, cluster_labels, vectors, clusteri
                 other_name = doc_names[other_idx]
                 other_vector = vectors[other_idx]
                 
+                # Ensure vectors are 2D for sklearn pairwise functions.
+                def to_2d(v):
+                    if hasattr(v, 'getnnz'):
+                        return v  # sparse matrix row is already 2D
+                    return v.reshape(1, -1) if v.ndim == 1 else v
+
+                dv = to_2d(doc_vector)
+                ov = to_2d(other_vector)
+
                 # Calculate various similarity metrics
-                cosine_sim = float(cosine_similarity(doc_vector, other_vector)[0][0])
-                eucl_dist = float(euclidean_distances(doc_vector, other_vector)[0][0])
+                cosine_sim = float(cosine_similarity(dv, ov)[0][0])
+                eucl_dist = float(euclidean_distances(dv, ov)[0][0])
                 eucl_sim = 1 / (1 + eucl_dist) if eucl_dist != 0 else 1.0
                 
                 # Calculate Jaccard similarity
@@ -541,9 +572,15 @@ def export_results(documents, processed_texts, cluster_labels, vectors, clusteri
                 other_tokens = set(processed_texts[other_idx].split())
                 jaccard_sim = len(doc_tokens.intersection(other_tokens)) / len(doc_tokens.union(other_tokens)) if doc_tokens or other_tokens else 0.0
                 
-                # Calculate centroid similarity
-                centroid = clustering_instance.kmeans.cluster_centers_[cluster_labels[doc_idx]]
-                centroid_sim = float(cosine_similarity(other_vector, centroid.reshape(1, -1))[0][0])
+                # Calculate centroid similarity — guard against HDBSCAN noise label (-1)
+                centroid_sim = 0.0
+                try:
+                    lbl = cluster_labels[doc_idx]
+                    if lbl >= 0 and hasattr(clustering_instance.kmeans, 'cluster_centers_'):
+                        centroid = clustering_instance.kmeans.cluster_centers_[lbl]
+                        centroid_sim = float(cosine_similarity(to_2d(other_vector), centroid.reshape(1, -1))[0][0])
+                except Exception:
+                    pass
                 
                 similarity_metrics.append({
                     "document": other_name,

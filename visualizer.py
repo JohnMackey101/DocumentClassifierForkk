@@ -1,12 +1,16 @@
 import plotly.express as px
 from sklearn.decomposition import PCA
 import pandas as pd
+from scipy import sparse
 
 class ClusterVisualizer:
     def plot_clusters(self, vectors, cluster_labels, doc_names):
         # Reduce dimensionality for visualization
         pca = PCA(n_components=2)
-        coords = pca.fit_transform(vectors.toarray())
+        if sparse.issparse(vectors):
+            coords = pca.fit_transform(vectors.toarray())
+        else:
+            coords = pca.fit_transform(vectors)
         
         # Create DataFrame for plotting
         df = pd.DataFrame({
