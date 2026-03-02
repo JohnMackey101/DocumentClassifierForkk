@@ -48,7 +48,7 @@ class DocumentClustering:
         # Get cluster centers
         cluster_centers = self.kmeans.cluster_centers_
 
-        # HDBSCAN struggles in high dimensions with small datasets (curse of dimensionality).
+        # HDBSCAN struggles in high dimensions with small datasets.
         # Reduce to min(n_samples-1, 10) dims with PCA before clustering.
         n_components = min(len(processed_texts) - 1, 10)
         reduced_embeddings = PCA(n_components=n_components).fit_transform(sentence_embeddings)
