@@ -7,4 +7,6 @@ streamlit
 plotly
 hdbscan
 scipy
+PyMuPDF
+umap-learn
 
